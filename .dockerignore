@@ -12,6 +12,5 @@ tests
 .ruff_cache
 credentials
 temp
-*.md
 Dockerfile
 .dockerignore
