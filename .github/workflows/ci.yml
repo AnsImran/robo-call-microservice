@@ -1,0 +1,158 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "**/*.md"
+      - ".gitignore"
+      - ".dockerignore"
+      - ".env.example"
+      - "temp/**"
+      - "credentials/**"
+      - "docs/**"
+      - ".python-version"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "**/*.md"
+      - ".gitignore"
+      - ".dockerignore"
+      - ".env.example"
+      - "temp/**"
+      - "credentials/**"
+      - "docs/**"
+      - ".python-version"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    env:
+      TWILIO_ACCOUNT_SID: ACtest0000000000000000000000000000
+      TWILIO_AUTH_TOKEN: test_auth_token_placeholder
+      TWILIO_FROM_NUMBER: "+10000000000"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check src tests
+
+      - name: Run tests
+        run: pytest -q
+
+  build-and-push:
+    name: Build and push image
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push robo-call-service
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ghcr.io/ansimran/microservice-robo-call/robo-call-service:latest
+          provenance: false
+          sbom: false
+          cache-from: type=registry,ref=ghcr.io/ansimran/microservice-robo-call/robo-call-service:buildcache
+          cache-to: type=registry,ref=ghcr.io/ansimran/microservice-robo-call/robo-call-service:buildcache,mode=max
+
+  deploy:
+    name: Deploy to EC2
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: true
+    steps:
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${{ secrets.DEPLOY_HOST }}" || (echo "Missing DEPLOY_HOST" && exit 1)
+          test -n "${{ secrets.DEPLOY_USER }}" || (echo "Missing DEPLOY_USER" && exit 1)
+          test -n "${{ secrets.DEPLOY_GIT_PATH }}" || (echo "Missing DEPLOY_GIT_PATH" && exit 1)
+          test -n "${{ secrets.DEPLOY_SSH_KEY }}" || (echo "Missing DEPLOY_SSH_KEY" && exit 1)
+          test -n "${{ secrets.GHCR_USER }}" || (echo "Missing GHCR_USER" && exit 1)
+          test -n "${{ secrets.GHCR_TOKEN }}" || (echo "Missing GHCR_TOKEN" && exit 1)
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          cat > ~/.ssh/id_deploy <<'EOF'
+          ${{ secrets.DEPLOY_SSH_KEY }}
+          EOF
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Pull and deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DEPLOY_GIT_PATH_B64="$(printf '%s' "${{ secrets.DEPLOY_GIT_PATH }}" | base64 -w0)"
+          GHCR_USER_B64="$(printf '%s' "${{ secrets.GHCR_USER }}" | base64 -w0)"
+          GHCR_TOKEN_B64="$(printf '%s' "${{ secrets.GHCR_TOKEN }}" | base64 -w0)"
+
+          ssh -i ~/.ssh/id_deploy "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "DEPLOY_GIT_PATH_B64='$DEPLOY_GIT_PATH_B64' GHCR_USER_B64='$GHCR_USER_B64' GHCR_TOKEN_B64='$GHCR_TOKEN_B64' bash -s" <<'EOS'
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+
+          deploy_git_path="$(printf '%s' "$DEPLOY_GIT_PATH_B64" | base64 -d)"
+          ghcr_user="$(printf '%s' "$GHCR_USER_B64" | base64 -d)"
+          ghcr_token="$(printf '%s' "$GHCR_TOKEN_B64" | base64 -d)"
+
+          cd "$deploy_git_path"
+
+          git fetch --prune origin main
+          git checkout main
+          git reset --hard origin/main
+
+          echo "$ghcr_token" | docker login ghcr.io -u "$ghcr_user" --password-stdin
+
+          docker compose pull
+          docker compose up -d --remove-orphans
+          docker image prune -f
+
+          echo "Waiting for service to start..."
+          sleep 5
+          docker compose ps
+          curl -fsS http://127.0.0.1:8000/api/v1/health && echo "  OK"
+          EOS
