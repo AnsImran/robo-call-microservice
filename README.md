@@ -23,7 +23,53 @@ One endpoint, one job: accept `{to, message}`, place a call, return the Twilio c
 
 How the pieces fit together — from `git push` all the way to a ringing phone.
 
-![Architecture](docs/diagrams/architecture.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, system-ui, sans-serif','fontSize':'14px'}}}%%
+flowchart LR
+    subgraph GH["GitHub"]
+        Repo["AnsImran/robo-call-microservice<br/>main branch"]
+        Actions["GitHub Actions<br/>CI workflow"]
+        GHCR["GHCR<br/>ghcr.io/.../robo-call-service:latest"]
+    end
+
+    subgraph EC2["EC2 host (ubuntu@***REMOVED***)"]
+        direction TB
+        subgraph Containers["Docker containers"]
+            Robo["robo-call-service<br/>FastAPI :8000 inside<br/>bound to 127.0.0.1:8013"]
+            Token["token-service<br/>:8000"]
+            Others["...sibling services<br/>notifications, worklist, etc."]
+        end
+        Caller["Internal caller<br/>(another container or host process)"]
+    end
+
+    Internet(("🌐 Internet"))
+    Twilio["Twilio Voice API"]
+    Phone["📞 Recipient phone"]
+
+    Repo -->|push to main| Actions
+    Actions -->|build + push image| GHCR
+    Actions -->|SSH + docker compose pull| EC2
+    GHCR -.->|docker pull| Robo
+
+    Caller -->|POST /api/v1/calls<br/>via host.docker.internal:8013| Robo
+    Robo -->|calls.create| Twilio
+    Twilio -->|rings| Phone
+
+    Internet -. "❌ blocked<br/>(loopback bind)" .-x Robo
+    Robo -->|✅ outbound only| Internet
+
+    classDef ours fill:#22c55e,stroke:#166534,stroke-width:2px,color:#fff
+    classDef infra fill:#3b82f6,stroke:#1e40af,stroke-width:2px,color:#fff
+    classDef external fill:#f97316,stroke:#9a3412,stroke-width:2px,color:#fff
+    classDef ci fill:#a855f7,stroke:#6b21a8,stroke-width:2px,color:#fff
+    classDef net fill:#64748b,stroke:#1e293b,stroke-width:2px,color:#fff
+
+    class Robo ours
+    class Token,Others,Caller,EC2,Containers infra
+    class Twilio,Phone,GHCR external
+    class Repo,Actions,GH ci
+    class Internet net
+```
 
 - **GitHub** hosts the source and runs the CI workflow.
 - **GHCR** stores built images; the EC2 host pulls from it.
@@ -37,7 +83,51 @@ How the pieces fit together — from `git push` all the way to a ringing phone.
 
 What happens when a caller sends `POST /api/v1/calls`.
 
-![Request flow](docs/diagrams/request-flow.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, system-ui, sans-serif','fontSize':'14px','actorBkg':'#3b82f6','actorBorder':'#1e40af','actorTextColor':'#fff','signalColor':'#334155','signalTextColor':'#0f172a','labelBoxBkgColor':'#22c55e','labelBoxBorderColor':'#166534','labelTextColor':'#fff','noteBkgColor':'#fde68a','noteBorderColor':'#b45309','activationBkgColor':'#22c55e','activationBorderColor':'#166534'}}}%%
+sequenceDiagram
+    autonumber
+    actor Caller as Internal caller
+    participant MW as RequestContextMiddleware
+    participant API as FastAPI /api/v1/calls
+    participant Schema as CallRequest<br/>(Pydantic v2)
+    participant Svc as TwilioCallService
+    participant Twilio as Twilio REST API
+    participant Phone as 📞 Recipient
+
+    Caller->>MW: POST /api/v1/calls<br/>{to, message}
+    activate MW
+    MW->>MW: assign X-Request-ID<br/>set ContextVar
+    MW->>API: forward request
+    activate API
+    API->>Schema: validate payload
+    alt validation fails
+        Schema-->>API: ValidationError
+        API-->>MW: 422 ErrorResponse
+        MW-->>Caller: 422 + X-Request-ID
+    else valid
+        Schema-->>API: CallRequest
+        API->>Svc: place_tts_call(to, message)
+        activate Svc
+        Svc->>Svc: build TwiML<br/><Say>message</Say>
+        Svc->>Twilio: calls.create(to, from_, twiml)
+        alt Twilio OK
+            Twilio-->>Svc: Call object (sid, status="queued")
+            Twilio->>Phone: 📞 places outbound call
+            Svc-->>API: {call_sid, status, to, from_number}
+            deactivate Svc
+            API-->>MW: 201 CallResponse
+        else Twilio error
+            Twilio-->>Svc: TwilioRestException
+            Svc-->>API: raise TwilioProviderError
+            API-->>MW: 502 ErrorResponse
+        end
+        deactivate API
+        MW->>MW: log timing<br/>add X-Request-ID header
+        MW-->>Caller: response + X-Request-ID
+    end
+    deactivate MW
+```
 
 1. `RequestContextMiddleware` assigns an `X-Request-ID` and stores it in a `ContextVar` so every log line inside this request is tagged with it.
 2. Pydantic validates `CallRequest` at the edge — rejects bad E.164 numbers (`422` with a structured `ErrorResponse` envelope containing the request ID).
@@ -50,7 +140,41 @@ What happens when a caller sends `POST /api/v1/calls`.
 
 ## CI/CD pipeline
 
-![CI/CD](docs/diagrams/cicd-pipeline.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, system-ui, sans-serif','fontSize':'14px'}}}%%
+flowchart TB
+    Push["git push origin main"] --> Filter{"paths-ignore<br/>filter"}
+
+    Filter -->|"only README.md /<br/>docs/** /<br/>temp/** /<br/>credentials/** /<br/>.env.example"| Skip["⏭️ workflow skipped<br/>(no rebuild)"]
+    Filter -->|"code or<br/>infra change"| Test
+
+    subgraph Workflow["GitHub Actions — CI workflow"]
+        direction TB
+        Test["🧪 Test job<br/>ruff check + pytest"]
+        Test --> Build["🏗️ Build-and-push job<br/>docker buildx + GHCR push<br/>buildcache layer"]
+        Build --> Deploy["🚀 Deploy job<br/>SSH → git reset --hard<br/>docker compose pull<br/>docker compose up -d<br/>health check"]
+    end
+
+    Deploy --> EC2["EC2 robo-call-service<br/>container recreated"]
+    EC2 --> Health{"/api/v1/health<br/>200 OK?"}
+    Health -->|yes| Done["✅ deployed"]
+    Health -->|no| Fail["❌ pipeline fails<br/>previous container keeps running"]
+
+    classDef ci fill:#a855f7,stroke:#6b21a8,stroke-width:2px,color:#fff
+    classDef ours fill:#22c55e,stroke:#166534,stroke-width:2px,color:#fff
+    classDef infra fill:#3b82f6,stroke:#1e40af,stroke-width:2px,color:#fff
+    classDef skip fill:#64748b,stroke:#1e293b,stroke-width:2px,color:#fff
+    classDef fail fill:#ef4444,stroke:#991b1b,stroke-width:2px,color:#fff
+    classDef ok fill:#22c55e,stroke:#166534,stroke-width:2px,color:#fff
+
+    class Push,Filter ci
+    class Test,Build,Deploy,Workflow ci
+    class EC2 infra
+    class Skip skip
+    class Done ok
+    class Fail fail
+    class Health ci
+```
 
 Every push to `main` runs the workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml):
 
@@ -67,7 +191,55 @@ Required repo secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_GIT_PATH`, `DEPLOY_
 
 Internal package structure — what imports what.
 
-![Module dependencies](docs/diagrams/module-dependencies.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, system-ui, sans-serif','fontSize':'13px'}}}%%
+flowchart TB
+    Main["main.py"] --> App["src/app.py<br/>create_app()"]
+
+    App --> Router["src/api/v1/router.py"]
+    App --> MW["src/middleware/<br/>request_context.py"]
+    App --> Cfg["src/core/config.py"]
+    App --> Log["src/core/logging.py"]
+    App --> Exc["src/core/exceptions.py"]
+    App --> ErrSchema["src/schemas/errors.py"]
+
+    Router --> CallEp["src/api/v1/endpoints/call.py"]
+    Router --> HealthEp["src/api/v1/endpoints/health.py"]
+
+    CallEp --> Deps["src/api/deps.py"]
+    CallEp --> CallSchema["src/schemas/call.py"]
+    CallEp --> ErrSchema
+    CallEp --> Svc["src/services/<br/>twilio_service.py"]
+
+    HealthEp --> Cfg
+    HealthEp --> HealthSchema["src/schemas/health.py"]
+
+    Deps --> Cfg
+    Deps --> Svc
+
+    Svc --> Cfg
+    Svc --> Exc
+    Svc --> TwExt["twilio<br/>(external SDK)"]
+
+    MW --> Log
+    Log --> ContextVar["contextvars<br/>(stdlib)"]
+    Cfg --> PSExt["pydantic-settings<br/>(external)"]
+    App --> FastAPIExt["fastapi + slowapi<br/>(external)"]
+
+    classDef api fill:#3b82f6,stroke:#1e40af,stroke-width:2px,color:#fff
+    classDef svc fill:#22c55e,stroke:#166534,stroke-width:2px,color:#fff
+    classDef core fill:#a855f7,stroke:#6b21a8,stroke-width:2px,color:#fff
+    classDef schema fill:#ec4899,stroke:#9d174d,stroke-width:2px,color:#fff
+    classDef ext fill:#64748b,stroke:#1e293b,stroke-width:2px,color:#fff
+    classDef entry fill:#f97316,stroke:#9a3412,stroke-width:2px,color:#fff
+
+    class Main,App entry
+    class Router,CallEp,HealthEp,Deps,MW api
+    class Svc svc
+    class Cfg,Log,Exc core
+    class CallSchema,HealthSchema,ErrSchema schema
+    class TwExt,PSExt,FastAPIExt,ContextVar ext
+```
 
 - `src/app.py` is the application factory (`create_app()`) — wires middleware, exception handlers, routers, and the slowapi limiter.
 - `src/api/v1/` holds the HTTP layer: `endpoints/call.py` and `endpoints/health.py`, aggregated by `router.py`.
@@ -81,7 +253,39 @@ Internal package structure — what imports what.
 
 Twilio walks a call through the following states. The API only sees `queued` at creation time — the rest happens inside Twilio.
 
-![Call lifecycle](docs/diagrams/call-lifecycle.png)
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, system-ui, sans-serif','fontSize':'14px'}}}%%
+stateDiagram-v2
+    direction LR
+    [*] --> queued: POST /api/v1/calls<br/>(API returns here)
+    queued --> initiated: Twilio picks up the job
+    initiated --> ringing: dial-tone to recipient
+    ringing --> in_progress: 📞 answered
+    ringing --> no_answer: timeout
+    ringing --> busy: line busy
+    ringing --> canceled: caller hangs up
+    initiated --> failed: network / carrier error
+    in_progress --> completed: ✅ recipient hung up
+    in_progress --> failed: ❌ mid-call error
+
+    completed --> [*]
+    no_answer --> [*]
+    busy --> [*]
+    canceled --> [*]
+    failed --> [*]
+
+    classDef start fill:#3b82f6,stroke:#1e40af,stroke-width:2px,color:#fff
+    classDef ring fill:#a855f7,stroke:#6b21a8,stroke-width:2px,color:#fff
+    classDef live fill:#22c55e,stroke:#166534,stroke-width:2px,color:#fff
+    classDef ok fill:#16a34a,stroke:#14532d,stroke-width:2px,color:#fff
+    classDef bad fill:#ef4444,stroke:#991b1b,stroke-width:2px,color:#fff
+
+    class queued,initiated start
+    class ringing ring
+    class in_progress live
+    class completed ok
+    class no_answer,busy,canceled,failed bad
+```
 
 | State | Meaning |
 |---|---|
