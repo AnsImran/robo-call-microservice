@@ -1,0 +1,31 @@
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, system-ui, sans-serif','fontSize':'14px'}}}%%
+stateDiagram-v2
+    direction LR
+    [*] --> queued: POST /api/v1/calls<br/>(API returns here)
+    queued --> initiated: Twilio picks up the job
+    initiated --> ringing: dial-tone to recipient
+    ringing --> in_progress: 📞 answered
+    ringing --> no_answer: timeout
+    ringing --> busy: line busy
+    ringing --> canceled: caller hangs up
+    initiated --> failed: network / carrier error
+    in_progress --> completed: ✅ recipient hung up
+    in_progress --> failed: ❌ mid-call error
+
+    completed --> [*]
+    no_answer --> [*]
+    busy --> [*]
+    canceled --> [*]
+    failed --> [*]
+
+    classDef start fill:#3b82f6,stroke:#1e40af,stroke-width:2px,color:#fff
+    classDef ring fill:#a855f7,stroke:#6b21a8,stroke-width:2px,color:#fff
+    classDef live fill:#22c55e,stroke:#166534,stroke-width:2px,color:#fff
+    classDef ok fill:#16a34a,stroke:#14532d,stroke-width:2px,color:#fff
+    classDef bad fill:#ef4444,stroke:#991b1b,stroke-width:2px,color:#fff
+
+    class queued,initiated start
+    class ringing ring
+    class in_progress live
+    class completed ok
+    class no_answer,busy,canceled,failed bad

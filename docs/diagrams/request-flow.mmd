@@ -1,0 +1,43 @@
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, system-ui, sans-serif','fontSize':'14px','actorBkg':'#3b82f6','actorBorder':'#1e40af','actorTextColor':'#fff','signalColor':'#334155','signalTextColor':'#0f172a','labelBoxBkgColor':'#22c55e','labelBoxBorderColor':'#166534','labelTextColor':'#fff','noteBkgColor':'#fde68a','noteBorderColor':'#b45309','activationBkgColor':'#22c55e','activationBorderColor':'#166534'}}}%%
+sequenceDiagram
+    autonumber
+    actor Caller as Internal caller
+    participant MW as RequestContextMiddleware
+    participant API as FastAPI /api/v1/calls
+    participant Schema as CallRequest<br/>(Pydantic v2)
+    participant Svc as TwilioCallService
+    participant Twilio as Twilio REST API
+    participant Phone as 📞 Recipient
+
+    Caller->>MW: POST /api/v1/calls<br/>{to, message}
+    activate MW
+    MW->>MW: assign X-Request-ID<br/>set ContextVar
+    MW->>API: forward request
+    activate API
+    API->>Schema: validate payload
+    alt validation fails
+        Schema-->>API: ValidationError
+        API-->>MW: 422 ErrorResponse
+        MW-->>Caller: 422 + X-Request-ID
+    else valid
+        Schema-->>API: CallRequest
+        API->>Svc: place_tts_call(to, message)
+        activate Svc
+        Svc->>Svc: build TwiML<br/><Say>message</Say>
+        Svc->>Twilio: calls.create(to, from_, twiml)
+        alt Twilio OK
+            Twilio-->>Svc: Call object (sid, status="queued")
+            Twilio->>Phone: 📞 places outbound call
+            Svc-->>API: {call_sid, status, to, from_number}
+            deactivate Svc
+            API-->>MW: 201 CallResponse
+        else Twilio error
+            Twilio-->>Svc: TwilioRestException
+            Svc-->>API: raise TwilioProviderError
+            API-->>MW: 502 ErrorResponse
+        end
+        deactivate API
+        MW->>MW: log timing<br/>add X-Request-ID header
+        MW-->>Caller: response + X-Request-ID
+    end
+    deactivate MW

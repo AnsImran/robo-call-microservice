@@ -1,0 +1,47 @@
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, system-ui, sans-serif','fontSize':'13px'}}}%%
+flowchart TB
+    Main["main.py"] --> App["src/app.py<br/>create_app()"]
+
+    App --> Router["src/api/v1/router.py"]
+    App --> MW["src/middleware/<br/>request_context.py"]
+    App --> Cfg["src/core/config.py"]
+    App --> Log["src/core/logging.py"]
+    App --> Exc["src/core/exceptions.py"]
+    App --> ErrSchema["src/schemas/errors.py"]
+
+    Router --> CallEp["src/api/v1/endpoints/call.py"]
+    Router --> HealthEp["src/api/v1/endpoints/health.py"]
+
+    CallEp --> Deps["src/api/deps.py"]
+    CallEp --> CallSchema["src/schemas/call.py"]
+    CallEp --> ErrSchema
+    CallEp --> Svc["src/services/<br/>twilio_service.py"]
+
+    HealthEp --> Cfg
+    HealthEp --> HealthSchema["src/schemas/health.py"]
+
+    Deps --> Cfg
+    Deps --> Svc
+
+    Svc --> Cfg
+    Svc --> Exc
+    Svc --> TwExt["twilio<br/>(external SDK)"]
+
+    MW --> Log
+    Log --> ContextVar["contextvars<br/>(stdlib)"]
+    Cfg --> PSExt["pydantic-settings<br/>(external)"]
+    App --> FastAPIExt["fastapi + slowapi<br/>(external)"]
+
+    classDef api fill:#3b82f6,stroke:#1e40af,stroke-width:2px,color:#fff
+    classDef svc fill:#22c55e,stroke:#166534,stroke-width:2px,color:#fff
+    classDef core fill:#a855f7,stroke:#6b21a8,stroke-width:2px,color:#fff
+    classDef schema fill:#ec4899,stroke:#9d174d,stroke-width:2px,color:#fff
+    classDef ext fill:#64748b,stroke:#1e293b,stroke-width:2px,color:#fff
+    classDef entry fill:#f97316,stroke:#9a3412,stroke-width:2px,color:#fff
+
+    class Main,App entry
+    class Router,CallEp,HealthEp,Deps,MW api
+    class Svc svc
+    class Cfg,Log,Exc core
+    class CallSchema,HealthSchema,ErrSchema schema
+    class TwExt,PSExt,FastAPIExt,ContextVar ext

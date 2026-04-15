@@ -1,0 +1,33 @@
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, system-ui, sans-serif','fontSize':'14px'}}}%%
+flowchart TB
+    Push["git push origin main"] --> Filter{"paths-ignore<br/>filter"}
+
+    Filter -->|"only README.md /<br/>docs/** /<br/>temp/** /<br/>credentials/** /<br/>.env.example"| Skip["⏭️ workflow skipped<br/>(no rebuild)"]
+    Filter -->|"code or<br/>infra change"| Test
+
+    subgraph Workflow["GitHub Actions — CI workflow"]
+        direction TB
+        Test["🧪 Test job<br/>ruff check + pytest"]
+        Test --> Build["🏗️ Build-and-push job<br/>docker buildx + GHCR push<br/>buildcache layer"]
+        Build --> Deploy["🚀 Deploy job<br/>SSH → git reset --hard<br/>docker compose pull<br/>docker compose up -d<br/>health check"]
+    end
+
+    Deploy --> EC2["EC2 robo-call-service<br/>container recreated"]
+    EC2 --> Health{"/api/v1/health<br/>200 OK?"}
+    Health -->|yes| Done["✅ deployed"]
+    Health -->|no| Fail["❌ pipeline fails<br/>previous container keeps running"]
+
+    classDef ci fill:#a855f7,stroke:#6b21a8,stroke-width:2px,color:#fff
+    classDef ours fill:#22c55e,stroke:#166534,stroke-width:2px,color:#fff
+    classDef infra fill:#3b82f6,stroke:#1e40af,stroke-width:2px,color:#fff
+    classDef skip fill:#64748b,stroke:#1e293b,stroke-width:2px,color:#fff
+    classDef fail fill:#ef4444,stroke:#991b1b,stroke-width:2px,color:#fff
+    classDef ok fill:#22c55e,stroke:#166534,stroke-width:2px,color:#fff
+
+    class Push,Filter ci
+    class Test,Build,Deploy,Workflow ci
+    class EC2 infra
+    class Skip skip
+    class Done ok
+    class Fail fail
+    class Health ci

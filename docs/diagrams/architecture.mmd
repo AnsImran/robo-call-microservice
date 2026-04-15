@@ -1,0 +1,45 @@
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, system-ui, sans-serif','fontSize':'14px'}}}%%
+flowchart LR
+    subgraph GH["GitHub"]
+        Repo["AnsImran/robo-call-microservice<br/>main branch"]
+        Actions["GitHub Actions<br/>CI workflow"]
+        GHCR["GHCR<br/>ghcr.io/.../robo-call-service:latest"]
+    end
+
+    subgraph EC2["EC2 host (ubuntu@***REMOVED***)"]
+        direction TB
+        subgraph Containers["Docker containers"]
+            Robo["robo-call-service<br/>FastAPI :8000 inside<br/>bound to 127.0.0.1:8013"]
+            Token["token-service<br/>:8000"]
+            Others["...sibling services<br/>notifications, worklist, etc."]
+        end
+        Caller["Internal caller<br/>(another container or host process)"]
+    end
+
+    Internet(("🌐 Internet"))
+    Twilio["Twilio Voice API"]
+    Phone["📞 Recipient phone"]
+
+    Repo -->|push to main| Actions
+    Actions -->|build + push image| GHCR
+    Actions -->|SSH + docker compose pull| EC2
+    GHCR -.->|docker pull| Robo
+
+    Caller -->|POST /api/v1/calls<br/>via host.docker.internal:8013| Robo
+    Robo -->|calls.create| Twilio
+    Twilio -->|rings| Phone
+
+    Internet -. "❌ blocked<br/>(loopback bind)" .-x Robo
+    Robo -->|✅ outbound only| Internet
+
+    classDef ours fill:#22c55e,stroke:#166534,stroke-width:2px,color:#fff
+    classDef infra fill:#3b82f6,stroke:#1e40af,stroke-width:2px,color:#fff
+    classDef external fill:#f97316,stroke:#9a3412,stroke-width:2px,color:#fff
+    classDef ci fill:#a855f7,stroke:#6b21a8,stroke-width:2px,color:#fff
+    classDef net fill:#64748b,stroke:#1e293b,stroke-width:2px,color:#fff
+
+    class Robo ours
+    class Token,Others,Caller,EC2,Containers infra
+    class Twilio,Phone,GHCR external
+    class Repo,Actions,GH ci
+    class Internet net

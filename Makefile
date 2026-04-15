@@ -1,4 +1,4 @@
-.PHONY: install run test lint format docker clean
+.PHONY: install run test lint format typecheck docker diagrams clean
 
 install:
 	pip install -e ".[dev]"
@@ -20,6 +20,9 @@ typecheck:
 
 docker:
 	docker build -t robo-call-service .
+
+diagrams:
+	python scripts/render_diagrams.py
 
 clean:
 	rm -rf .pytest_cache .ruff_cache .mypy_cache **/__pycache__
