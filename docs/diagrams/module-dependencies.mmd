@@ -1,36 +1,54 @@
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, system-ui, sans-serif','fontSize':'13px'}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, system-ui, sans-serif','fontSize':'12px'}}}%%
 flowchart TB
-    Main["main.py"] --> App["src/app.py<br/>create_app()"]
+    Main["<b>main.py</b><br/><i>entry point — starts the web server</i>"]
+    App["<b>src/app.py</b><br/><i>application factory — wires everything<br/>(routes, middleware, error handlers)</i>"]
+    Main --> App
 
-    App --> Router["src/api/v1/router.py"]
-    App --> MW["src/middleware/<br/>request_context.py"]
-    App --> Cfg["src/core/config.py"]
-    App --> Log["src/core/logging.py"]
-    App --> Exc["src/core/exceptions.py"]
-    App --> ErrSchema["src/schemas/errors.py"]
+    Router["<b>src/api/v1/router.py</b><br/><i>collects all v1 endpoints into one group</i>"]
+    MW["<b>src/middleware/<br/>request_context.py</b><br/><i>tags every request with an ID<br/>and logs how long it took</i>"]
+    Cfg["<b>src/core/config.py</b><br/><i>loads Twilio credentials and app settings<br/>from the .env file; validates them</i>"]
+    Log["<b>src/core/logging.py</b><br/><i>sets up log formatting so every line<br/>shows which request it belongs to</i>"]
+    Exc["<b>src/core/exceptions.py</b><br/><i>custom error types<br/>(e.g. TwilioProviderError)</i>"]
+    ErrSchema["<b>src/schemas/errors.py</b><br/><i>shape of error responses<br/>{error, detail, request_id}</i>"]
 
-    Router --> CallEp["src/api/v1/endpoints/call.py"]
-    Router --> HealthEp["src/api/v1/endpoints/health.py"]
+    App --> Router
+    App --> MW
+    App --> Cfg
+    App --> Log
+    App --> Exc
+    App --> ErrSchema
 
-    CallEp --> Deps["src/api/deps.py"]
-    CallEp --> CallSchema["src/schemas/call.py"]
+    CallEp["<b>src/api/v1/endpoints/call.py</b><br/><i>POST /api/v1/calls —<br/>takes {to, message}, places the call</i>"]
+    HealthEp["<b>src/api/v1/endpoints/health.py</b><br/><i>GET /api/v1/health —<br/>tells load balancers 'I'm alive'</i>"]
+    Router --> CallEp
+    Router --> HealthEp
+
+    Deps["<b>src/api/deps.py</b><br/><i>creates a single Twilio service instance<br/>(FastAPI dependency injection)</i>"]
+    CallSchema["<b>src/schemas/call.py</b><br/><i>Pydantic models for the call request<br/>and response; validates E.164 phone format</i>"]
+    Svc["<b>src/services/<br/>twilio_service.py</b><br/><i>the only place that talks to Twilio —<br/>builds TwiML, calls the Twilio API</i>"]
+    HealthSchema["<b>src/schemas/health.py</b><br/><i>shape of the health response<br/>{status, service, version, environment}</i>"]
+
+    CallEp --> Deps
+    CallEp --> CallSchema
     CallEp --> ErrSchema
-    CallEp --> Svc["src/services/<br/>twilio_service.py"]
-
+    CallEp --> Svc
     HealthEp --> Cfg
-    HealthEp --> HealthSchema["src/schemas/health.py"]
-
+    HealthEp --> HealthSchema
     Deps --> Cfg
     Deps --> Svc
-
     Svc --> Cfg
     Svc --> Exc
-    Svc --> TwExt["twilio<br/>(external SDK)"]
 
+    TwExt["<b>twilio SDK</b><br/><i>official Twilio Python library<br/>(external dependency)</i>"]
+    PSExt["<b>pydantic-settings</b><br/><i>reads .env into typed Python objects</i>"]
+    FastAPIExt["<b>fastapi + slowapi</b><br/><i>web framework and rate limiter</i>"]
+    ContextVar["<b>contextvars</b><br/><i>Python stdlib — stores the request ID<br/>so every log line can include it</i>"]
+
+    Svc --> TwExt
     MW --> Log
-    Log --> ContextVar["contextvars<br/>(stdlib)"]
-    Cfg --> PSExt["pydantic-settings<br/>(external)"]
-    App --> FastAPIExt["fastapi + slowapi<br/>(external)"]
+    Log --> ContextVar
+    Cfg --> PSExt
+    App --> FastAPIExt
 
     classDef api fill:#3b82f6,stroke:#1e40af,stroke-width:2px,color:#fff
     classDef svc fill:#22c55e,stroke:#166534,stroke-width:2px,color:#fff
