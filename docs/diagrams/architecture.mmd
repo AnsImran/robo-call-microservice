@@ -6,7 +6,7 @@ flowchart LR
         GHCR["GHCR<br/>ghcr.io/.../robo-call-service:latest"]
     end
 
-    subgraph EC2["EC2 host (ubuntu@***REMOVED***)"]
+    subgraph EC2["EC2 host"]
         direction TB
         subgraph Containers["Docker containers"]
             Robo["robo-call-service<br/>FastAPI :8000 inside<br/>bound to 127.0.0.1:8013"]
