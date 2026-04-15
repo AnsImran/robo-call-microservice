@@ -154,5 +154,5 @@ jobs:
           echo "Waiting for service to start..."
           sleep 5
           docker compose ps
-          curl -fsS http://127.0.0.1:8000/api/v1/health && echo "  OK"
+          curl -fsS http://127.0.0.1:8013/api/v1/health && echo "  OK"
           EOS

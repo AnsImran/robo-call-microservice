@@ -12,7 +12,7 @@ services:
       HOST: 0.0.0.0
       PORT: 8000
     ports:
-      - "127.0.0.1:8000:8000"                # Bind to loopback only — reachable from the EC2 host but NOT from the internet.
+      - "127.0.0.1:8013:8000"                # Host port 8013 on loopback only — reachable from the EC2 host but NOT from the internet. Container still listens on 8000.
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=3).status==200 else 1)"]
